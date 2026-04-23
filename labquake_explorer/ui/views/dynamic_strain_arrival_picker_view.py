@@ -179,7 +179,17 @@ class DynamicStrainArrivalPickerView(tk.Toplevel):
             line_idx += 1
         self.axs[4].set_ylabel("location along fault (mm)")
         self.axs[4].set_xlabel("time - %f (s)" %  self.event["event_time"])
-        if exp_number >= 5958:
+        enabled_locations = [
+            self.event["strain"]["locations"][i]
+            for i in range(n_channels)
+            if self.enabled_channels[i]
+        ]
+        if enabled_locations:
+            loc_min = min(enabled_locations)
+            loc_max = max(enabled_locations)
+            margin = max(10.0, 0.1 * (loc_max - loc_min if loc_max > loc_min else abs(loc_max) + 1.0))
+            self.axs[4].set_ylim(loc_max + margin, loc_min - margin)
+        elif exp_number >= 5958:
             self.axs[4].set_ylim(160, -10)
         else:
             self.axs[4].set_ylim(105, 0)

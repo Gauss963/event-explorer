@@ -159,8 +159,18 @@ class EventAnalyzerView(tk.Toplevel):
         self.figure.canvas.mpl_connect('button_press_event', self.on_press)
         self.figure.canvas.mpl_connect('button_release_event', self.on_release)
         self.figure.canvas.mpl_connect('resize_event', self.on_resize)
-        self.data_y_combo.bind("<<ComboboxSelected>>", self.data_selected)
         self.data_x_combo.bind("<<ComboboxSelected>>", self.data_selected)
+        self.data_y_combo.bind("<<ComboboxSelected>>", self.data_selected)
+
+    @staticmethod
+    def _is_usable_series(value):
+        if not isinstance(value, (list, np.ndarray)):
+            return False
+        try:
+            arr = np.asarray(value, dtype=float)
+        except (TypeError, ValueError):
+            return False
+        return arr.size > 1 and np.isfinite(arr).any()
     
     def _set_default_point_positions(self):
         """Helper method to set default point positions"""
@@ -247,6 +257,22 @@ class EventAnalyzerView(tk.Toplevel):
         # Sort the fields for easier selection
         matching_fields.sort()
         
+        def get_nested_data(data_dict, path):
+            parts = path.split('/')
+            current = data_dict
+            for part in parts:
+                if part in current:
+                    current = current[part]
+                else:
+                    return None
+            return current
+
+        def choose_preferred_field(candidates):
+            for field in candidates:
+                if field in matching_fields and self._is_usable_series(get_nested_data(self.event, field)):
+                    return field
+            return None
+
         # Configure comboboxes
         self.data_x_combo.config(values=matching_fields)
         self.data_y_combo.config(values=matching_fields)
@@ -254,14 +280,22 @@ class EventAnalyzerView(tk.Toplevel):
         # Set initial selections using smart defaults
         
         # Try to set x_data (displacement)
-        if self.item_x and self.item_x in matching_fields:
+        if (
+            self.item_x
+            and self.item_x in matching_fields
+            and self._is_usable_series(get_nested_data(self.event, self.item_x))
+        ):
             self.data_x_combo.set(self.item_x)
         else:
-            # Try to find displacement field
-            displacement_fields = [f for f in matching_fields if 'displacement' in f.lower()]
-            if displacement_fields:
-                self.data_x_combo.set(displacement_fields[0])
-                self.item_x = displacement_fields[0]
+            preferred_x = choose_preferred_field([
+                "LP_displacement",
+                "displacement",
+                "normal_displacement",
+                "time",
+            ])
+            if preferred_x is not None:
+                self.data_x_combo.set(preferred_x)
+                self.item_x = preferred_x
             elif 'time' in matching_fields:
                 # Default to time if no displacement field
                 self.data_x_combo.set('time')
@@ -272,14 +306,21 @@ class EventAnalyzerView(tk.Toplevel):
                 self.item_x = matching_fields[0]
         
         # Try to set y_data (shear_stress)
-        if self.item_y and self.item_y in matching_fields:
+        if (
+            self.item_y
+            and self.item_y in matching_fields
+            and self._is_usable_series(get_nested_data(self.event, self.item_y))
+        ):
             self.data_y_combo.set(self.item_y)
         else:
-            # Try to find shear_stress field
-            stress_fields = [f for f in matching_fields if 'shear_stress' in f.lower()]
-            if stress_fields:
-                self.data_y_combo.set(stress_fields[0])
-                self.item_y = stress_fields[0]
+            preferred_y = choose_preferred_field([
+                "shear_stress",
+                "normal_stress",
+                "friction",
+            ])
+            if preferred_y is not None:
+                self.data_y_combo.set(preferred_y)
+                self.item_y = preferred_y
             else:
                 # Try other stress fields
                 other_stress = [f for f in matching_fields if 'stress' in f.lower()]
@@ -339,22 +380,31 @@ class EventAnalyzerView(tk.Toplevel):
         
         if self.item_x is None:
             # If no x data is selected, use index
-            self.data_y = get_nested_data(self.event, self.item_y)
+            self.data_y = np.asarray(get_nested_data(self.event, self.item_y), dtype=float)
             if self.data_y is None:
                 return
                 
             self.data_x = np.arange(len(self.data_y))  # Use indices as x-values
+            valid = np.isfinite(self.data_x) & np.isfinite(self.data_y)
+            self.data_x = self.data_x[valid]
+            self.data_y = self.data_y[valid]
+            if self.data_y.size == 0:
+                return
             self.ax.plot(self.data_x, self.data_y, zorder=-100, linewidth=1.5)
             self.ax.set_ylabel(self.item_y)
             self.ax.set_xlabel("Index")
         else:
             # Use selected x and y data
-            self.data_x = get_nested_data(self.event, self.item_x)
-            self.data_y = get_nested_data(self.event, self.item_y)
+            self.data_x = np.asarray(get_nested_data(self.event, self.item_x), dtype=float)
+            self.data_y = np.asarray(get_nested_data(self.event, self.item_y), dtype=float)
             
             if self.data_x is None or self.data_y is None:
                 return
-                
+            valid = np.isfinite(self.data_x) & np.isfinite(self.data_y)
+            self.data_x = self.data_x[valid]
+            self.data_y = self.data_y[valid]
+            if self.data_x.size == 0 or self.data_y.size == 0:
+                return
             self.ax.plot(self.data_x, self.data_y, zorder=-100, linewidth=1.5)
             self.ax.set_ylabel(self.item_y)
             self.ax.set_xlabel(self.item_x)
@@ -475,6 +525,8 @@ class EventAnalyzerView(tk.Toplevel):
             return
             
         try:
+            if len(self.data_x) < 2 or len(self.data_y) < 2:
+                return
             # Sort indices to ensure proper range selection
             loading_idx_start = min(self.picked_idx[0], self.picked_idx[1])
             loading_idx_end = max(self.picked_idx[0], self.picked_idx[1])
@@ -492,6 +544,10 @@ class EventAnalyzerView(tk.Toplevel):
             
             x_rupture = [self.data_x[i] for i in rupture_indices]
             y_rupture = [self.data_y[i] for i in rupture_indices]
+            if len(x_loading) < 2 or len(x_rupture) < 2:
+                return
+            if not (np.isfinite(x_loading).all() and np.isfinite(y_loading).all() and np.isfinite(x_rupture).all() and np.isfinite(y_rupture).all()):
+                return
             
             # Perform linear regression for loading stiffness
             slope_loading, intercept_loading, r_value_loading, p_value_loading, std_err_loading = stats.linregress(x_loading, y_loading)

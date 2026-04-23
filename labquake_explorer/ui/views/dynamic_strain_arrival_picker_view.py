@@ -187,7 +187,7 @@ class DynamicStrainArrivalPickerView(tk.Toplevel):
         if enabled_locations:
             loc_min = min(enabled_locations)
             loc_max = max(enabled_locations)
-            margin = max(10.0, 0.1 * (loc_max - loc_min if loc_max > loc_min else abs(loc_max) + 1.0))
+            margin = max(20.0, 0.2 * (loc_max - loc_min if loc_max > loc_min else abs(loc_max) + 1.0))
             self.axs[4].set_ylim(loc_max + margin, loc_min - margin)
         elif exp_number >= 5958:
             self.axs[4].set_ylim(160, -10)

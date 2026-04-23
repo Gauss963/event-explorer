@@ -136,7 +136,7 @@ class DynamicStrainArrivalPickerView(tk.Toplevel):
 
         n_channels = y.shape[0]
         if self.enabled_channels is None:
-            if "enabled_channels" in self.event:
+            if "enabled_channels" in self.event["strain"]:
                 self.enabled_channels = self.event["strain"]["enabled_channels"]
             else:
                 if exp_number >= 5958:
@@ -144,7 +144,7 @@ class DynamicStrainArrivalPickerView(tk.Toplevel):
                 else:
                     self.enabled_channels = [i % 2 == 0 for i in range(n_channels)]
         if self.fitting_channels is None:
-            if "fitting_channels" in self.event:
+            if "fitting_channels" in self.event["strain"]:
                 self.fitting_channels = self.event["strain"]["fitting_channels"]
             else:
                 if exp_number >= 5958:
@@ -173,7 +173,8 @@ class DynamicStrainArrivalPickerView(tk.Toplevel):
                 continue
             loc = self.event["strain"]["locations"][i]
             self.axs[4].plot([tt[0], tt[-1]], [loc, loc], "k:", zorder=-101)
-            ratios[i] = -12 / (y[i, :].max() - y[i, :].min())
+            amplitude = y[i, :].max() - y[i, :].min()
+            ratios[i] = -12 / amplitude if amplitude != 0 else 1.0
             self.lines[i] = self.axs[4].plot(tt, y[i, :] * ratios[i] + loc, color="C%d" % line_idx, zorder=-100)
             line_idx += 1
         self.axs[4].set_ylabel("location along fault (mm)")

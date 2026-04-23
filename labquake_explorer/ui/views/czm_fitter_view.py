@@ -70,6 +70,40 @@ class CZMFitterView(tk.Toplevel):
         # Initial plot
         self.update_plot()
 
+    def _get_original_strain_data(self):
+        strain = self.event["strain"]
+        if "original" in strain:
+            return strain["original"]
+        return strain
+
+    def _get_gauge_options(self):
+        original = self._get_original_strain_data()
+        n_gauges = len(original["raw"])
+        enabled = self.event["strain"].get("enabled_channels")
+        if enabled is None or len(enabled) != n_gauges:
+            return [str(i) for i in range(n_gauges)]
+        indices = [str(i) for i, flag in enumerate(enabled) if flag]
+        return indices or [str(i) for i in range(n_gauges)]
+
+    def _get_default_gauge_index(self):
+        options = self._get_gauge_options()
+        fitting = self.event["strain"].get("fitting_channels")
+        if fitting is not None:
+            for idx, flag in enumerate(fitting):
+                if flag:
+                    return idx
+        return int(options[0])
+
+    def _get_reference_eyy(self, exy):
+        original = self._get_original_strain_data()
+        raw = original["raw"]
+        reference_idx = 14
+        if len(raw) > reference_idx:
+            candidate = DataProcessor.voltage_to_strain(raw[reference_idx])
+            if np.any(np.abs(candidate) > 0):
+                return candidate, "Eyy"
+        return np.zeros_like(exy), "Eyy (reference unavailable)"
+
     def create_control_frame(self):
         control_frame = ttk.Frame(self)
         control_frame.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
@@ -199,8 +233,8 @@ class CZMFitterView(tk.Toplevel):
         self.event = self.data_manager.get_data(f"runs/[{self.run_idx}]/events/[{self.event_idx}]")
 
         # Dynamically determine number of strain gauges
-        self.num_gauges = len(self.event["strain"]["original"]["raw"])
-        gauge_options = [str(i) for i in range(self.num_gauges)]
+        self.num_gauges = len(self._get_original_strain_data()["raw"])
+        gauge_options = self._get_gauge_options()
         self.gauge_combobox.config(values=gauge_options)
 
         # Update view limits and parameters if saved data exists
@@ -211,15 +245,16 @@ class CZMFitterView(tk.Toplevel):
                 vline_x0, vline_x1 = params[4], params[5]
                 vline_x2 = vline_x1 * 2 - vline_x0
                 self.x_lim_min, self.x_lim_max = params[6], params[7]
-                self.strain_gauge.set(min(6, self.num_gauges - 1))
+                self.strain_gauge.set(self._get_default_gauge_index())
             elif isinstance(params, dict):
                 self._set_parameters(params['Cf'], params['y'], params['Xc'], params['Gc'])
                 vline_x0, vline_x1, vline_x2 = params['x_min'], params['x_tip'], params['x_max']
                 self.x_lim_min, self.x_lim_max = params['x_lim_min'], params['x_lim_max']
-                if 'strain_gauge' in params and 0 <= params['strain_gauge'] < self.num_gauges:
+                valid_gauge_indices = {int(value) for value in gauge_options}
+                if 'strain_gauge' in params and params['strain_gauge'] in valid_gauge_indices:
                     self.strain_gauge.set(params['strain_gauge'])
                 else:
-                    self.strain_gauge.set(min(6, self.num_gauges - 1))
+                    self.strain_gauge.set(self._get_default_gauge_index())
             self.gauge_combobox.set(self.strain_gauge.get())
             self._plot_vertical_lines([vline_x0, vline_x1, vline_x2])
             self.event['czm_parms'] = {
@@ -227,6 +262,7 @@ class CZMFitterView(tk.Toplevel):
                 'y': self.y.get(),
                 'Xc': self.Xc.get(),
                 'Gc': self.Gc.get(),
+                'strain_gauge': self.strain_gauge.get(),
                 'x_min': vline_x0,
                 'x_tip': vline_x1,
                 'x_max': vline_x2,
@@ -304,6 +340,7 @@ class CZMFitterView(tk.Toplevel):
                 'y': self.y.get(),
                 'Xc': self.Xc.get(),
                 'Gc': self.Gc.get(),
+                'strain_gauge': self.strain_gauge.get(),
                 'x_min': vline_x0,
                 'x_tip': vline_x1,
                 'x_max': vline_x2,
@@ -340,10 +377,11 @@ class CZMFitterView(tk.Toplevel):
             ax.clear()
 
         # Get data
-        t = self.event["strain"]["original"]["time"] - self.event["event_time"]
+        original = self._get_original_strain_data()
+        t = original["time"] - self.event["event_time"]
         gage_idx = self.strain_gauge.get()
-        exy = DataProcessor.voltage_to_strain(self.event["strain"]["original"]["raw"][gage_idx])
-        eyy = DataProcessor.voltage_to_strain(self.event["strain"]["original"]["raw"][14])
+        exy = DataProcessor.voltage_to_strain(original["raw"][gage_idx])
+        eyy, eyy_label = self._get_reference_eyy(exy)
 
         # Apply filter if enabled
         if self.filtering:
@@ -358,7 +396,7 @@ class CZMFitterView(tk.Toplevel):
         idx_zero_yy = np.argmin(np.abs(t - line_positions[0]))
         # Plot data
         self.axs[0].plot(t, exy - exy[idx_zero_xy], 'b-', label='Exy')
-        self.axs[1].plot(t, eyy - eyy[idx_zero_yy], 'r-', label='Eyy')
+        self.axs[1].plot(t, eyy - eyy[idx_zero_yy], 'r-', label=eyy_label)
 
         # Add delta_sigma_xy to the Sxy axis
         rupture_speed = self.Cf.get()
@@ -468,9 +506,10 @@ class CZMFitterView(tk.Toplevel):
         t0, t1, t2 = sorted([self.vlines[0].get_xdata()[0], self.vlines[1].get_xdata()[0], self.vlines[2].get_xdata()[0]])
         
         # Get experimental data
-        t = self.event["strain"]["original"]["time"] - self.event["event_time"]
+        original = self._get_original_strain_data()
+        t = original["time"] - self.event["event_time"]
         gage_idx = self.strain_gauge.get()
-        exy = DataProcessor.voltage_to_strain(self.event["strain"]["original"]["raw"][gage_idx])
+        exy = DataProcessor.voltage_to_strain(original["raw"][gage_idx])
         
         if self.filtering:
             window_length = self.filter_window.get()
